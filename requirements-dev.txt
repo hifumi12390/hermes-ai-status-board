@@ -1,0 +1,4 @@
+# Versions used for the Python fixture/API verification.
+fastapi==0.133.1
+httpx==0.28.1
+uvicorn==0.41.0

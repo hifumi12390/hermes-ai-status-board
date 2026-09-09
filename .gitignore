@@ -1,0 +1,26 @@
+__pycache__/
+*.pyc
+tests/preview-data/
+tests/preview-dist/
+artifacts/
+
+# Private development and deployment evidence must stay local.
+/VERIFICATION.md
+/deploy_authorized.py
+/verify_deployment.py
+/stage-package.ps1
+/tests/fixtures/
+.env
+.env.*
+*.sqlite
+*.sqlite3
+*.sqlite3-*
+*.db
+*.db-*
+*.log
+*.zip
+.venv/
+venv/
+node_modules/
+.DS_Store
+Thumbs.db

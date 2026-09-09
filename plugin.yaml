@@ -1,0 +1,4 @@
+manifest_version: 1
+name: ai-status-board
+version: 0.1.0
+description: "Official AI service status and local observation history."
