@@ -59,12 +59,63 @@ class History:
                 self.db.execute('UPDATE snapshots SET expires=? WHERE surface=? AND at=?',(expires,surface,last[0]))
             else:
                 self.db.execute('INSERT OR IGNORE INTO snapshots VALUES(?,?,?,?,?)',(surface,at,expires,fingerprint,encode(payload)))
-            for kind,key in [('incident','incidents'),('maintenance','maintenances'),('feed','feed_events')]:
-                for item in envelope.get(key,[]):
-                    self.db.execute('INSERT OR REPLACE INTO incidents VALUES(?,?,?,?,?)',(surface,item['id'],kind,encode(item),at))
+            if not envelope.get('source',{}).get('error'):
+                self._upsert_events(surface,envelope,at)
             for body in raw:
                 digest = hashlib.sha256(body).hexdigest()
                 self.db.execute('INSERT INTO raw VALUES(?,?,?) ON CONFLICT(hash) DO UPDATE SET at=excluded.at',(digest,at,zlib.compress(body)))
+
+    def record_events(self,surface,envelope,at):
+        """Official history can arrive without a successful current observation."""
+        with self.lock,self.db:
+            self._upsert_events(surface,envelope,at)
+
+    def _upsert_events(self,surface,envelope,at):
+        for kind,key in [('incident','incidents'),('maintenance','maintenances'),('feed','feed_events')]:
+            for item in envelope.get(key,[]):
+                self.db.execute('INSERT OR REPLACE INTO incidents VALUES(?,?,?,?,?)',(surface,item['id'],kind,encode(item),at))
+
+    def official_timeline(self,surface,start,end,step,component=None):
+        """Published incident spans, never inferred availability or uptime.
+
+        Unknown-ended/resolved records and feed publications are point markers.
+        An active span stops at its last successful retrieval, not at query time.
+        """
+        with self.lock:
+            rows=self.db.execute('SELECT kind,payload,seen FROM incidents WHERE surface=?',(surface,)).fetchall()
+        buckets=[]
+        cursor=start
+        while cursor<end:
+            buckets.append({'from':utc(cursor),'to':utc(min(end,cursor+step)),'state':'unknown','event_count':0,'point_count':0,'unknown_impact_count':0,'_states':[]})
+            cursor+=step
+        count=0
+        for kind,payload,seen in rows:
+            item=json.loads(payload)
+            if component is not None and component not in item.get('component_ids',[]): continue
+            begin=seconds(item.get('started_at') or item.get('scheduled_for') or item.get('display_at'))
+            finish=seconds(item.get('resolved_at') or item.get('scheduled_until'))
+            point=kind=='feed' or item.get('time_basis')=='publication'
+            if finish is None:
+                if item.get('state') in ('investigating','identified','monitoring','in_progress','verifying'):
+                    finish=seen
+                else: point=True
+            if finish is not None and begin is not None and finish<=begin: point=True
+            if begin is None or begin>=end: continue
+            if point:
+                if begin<start: continue
+                left=right=int((begin-start)//step)
+            else:
+                if finish<=start: continue
+                left=max(0,int((begin-start)//step))
+                right=min(len(buckets)-1,int((min(finish,end)-start-0.000001)//step))
+            value='maintenance' if kind=='maintenance' else {'none':'informational','minor':'degraded','major':'partial_outage','critical':'major_outage'}.get(item.get('impact'),'unknown')
+            count+=1
+            for idx in range(left,right+1):
+                b=buckets[idx]; b['event_count']+=1; b['point_count']+=int(point)
+                b['unknown_impact_count']+=int(value=='unknown'); b['_states'].append(value)
+        for b in buckets: b['state']=worst(b.pop('_states'))
+        return {'basis':'official_incident_history','buckets':buckets,'event_count':count,
+                'completeness':'Published history only; gray empty periods do not prove uptime. Severity describes the incident, not continuous component availability. Point markers have no asserted duration.'}
 
     def prune(self,now):
         with self.lock,self.db:

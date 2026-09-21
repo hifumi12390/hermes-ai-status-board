@@ -59,6 +59,19 @@ class Adapter:
         if self.kind == 'google': return {'current':self.origin+'incidents.json','products':self.origin+'products.json'}
         return {'current':self.origin}
 
+    def history_endpoints(self):
+        return {k:v for k,v in self.endpoints().items() if k in ('history','maintenance','feed')}
+
+    def normalize_history(self,key,raw):
+        if key=='feed': return {'feed_events':self._generic_feed(raw)}
+        doc=require(json_data(raw),dict,'Invalid history')
+        if key=='history': return {'incidents':[self._incident(i) for i in array(doc,'incidents')]}
+        return {'maintenances':[self._maintenance(m) for m in array(doc,'scheduled_maintenances')]}
+
+    def _maintenance(self,m):
+        require(m,dict,'Invalid maintenance')
+        return {'id':identifier(m),'title':text(m.get('name')),'state':text(m.get('status'),50),'scheduled_for':stamp(m.get('scheduled_for')),'scheduled_until':stamp(m.get('scheduled_until')),'component_ids':[identifier(c) for c in m.get('components',[])],'url':safe_url(m.get('shortlink'),self.origin)}
+
     def normalize(self, bundle):
         if self.kind in ('statuspage','openai'): result = self._statuspage(bundle)
         elif self.kind == 'google': result = self._google(bundle)
@@ -93,14 +106,14 @@ class Adapter:
             require(c,dict,'Invalid component')
             if not isinstance(c.get('status'),str) or not isinstance(c.get('name'),str): raise SourceError('parse_error','Changed component schema')
             comps.append({'id':identifier(c),'name':text(c['name'],200),'group':text(c.get('group_id'),256) or None,'state':state(c['status']),'raw_state':text(c['status'],80),'showcase':c.get('showcase',True),'updated_at':stamp(c.get('updated_at'))})
-        history = json_data(bundle['history']) if 'history' in bundle else current
+        history = json_data(bundle['history']) if 'history' in bundle else {'incidents':current.get('incidents',[])}
         incidents = {identifier(i):self._incident(i) for i in array(history,'incidents')}
         # Summary's active set is authoritative for activity; old history must not overwrite it.
         for i in current.get('incidents',[]): incidents[identifier(i)] = self._incident(i)
         maint = {}
         for doc in ([json_data(bundle['maintenance'])] if 'maintenance' in bundle else []) + [current]:
             for m in doc.get('scheduled_maintenances',[]):
-                maint[identifier(m)] = {'id':identifier(m),'title':text(m.get('name')),'state':text(m.get('status'),50),'scheduled_for':stamp(m.get('scheduled_for')),'scheduled_until':stamp(m.get('scheduled_until')),'component_ids':[identifier(c) for c in m.get('components',[])],'url':safe_url(m.get('shortlink'), self.origin)}
+                maint[identifier(m)] = self._maintenance(m)
         overall = worst([state(status['indicator'])]+[c['state'] for c in comps])
         if any(m.get('status') in ('in_progress','verifying') for m in current.get('scheduled_maintenances',[])): overall = worst([overall,'maintenance'])
         warnings = []
@@ -154,7 +167,8 @@ class Adapter:
             if comp: components[comp] = {'id':comp,'name':name[1] if name else comp,'state':'unknown','showcase':True}
             dates = re.findall(r'(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun),\s*\d{1,2}\s+\w+\s+\d{4}\s+\d{2}:\d{2}:\d{2}\s+GMT',body)
             incidents.append({'id':text(item.findtext('guid'),256),'title':text(title),'state':status if status in ('resolved','investigating','identified','monitoring') else 'unknown','impact':'unknown','started_at':rss_date(item.findtext('pubDate')),'resolved_at':rss_date(resolved[1]) if resolved else None,'updated_at':max(filter(None,map(rss_date,dates)),default=rss_date(item.findtext('pubDate'))),'component_ids':[comp] if comp else [],'url':safe_url(item.findtext('link'),self.origin),'updates':[{'id':text(item.findtext('guid'),256)+':feed','state':status,'display_at':max(filter(None,map(rss_date,dates)),default=None),'body':text(body,10000)}]})
-        return {'overall':{'state':'unknown','summary':'RSS incident history available; current availability and severity are not asserted.'},'components':list(components.values()),'incidents':incidents,'source_updated_at':max((i['updated_at'] for i in incidents if i['updated_at']),default=None),'warnings':['Components are discovered from published incidents, not a complete current inventory. RSS severity is not authoritative.']}
+        for incident in incidents: incident['time_basis']='publication'
+        return {'overall':{'state':'unknown','summary':'RSS incident history available; current availability and severity are not asserted.'},'components':list(components.values()),'incidents':incidents,'source_updated_at':max((i['updated_at'] for i in incidents if i['updated_at']),default=None),'warnings':['Components are discovered from published incidents, not a complete current inventory. RSS severity is not authoritative. RSS publication times are markers, not confirmed outage start times.']}
 
     def _html(self,raw):
         visible = plain(raw.decode('utf-8', errors='strict'))

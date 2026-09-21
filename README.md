@@ -10,7 +10,8 @@ AI Status Board is separate from the `ai-status` hardware-monitoring plugin. It 
 ## Features
 
 - Dark, line-based service list with current status and official source links.
-- Thin, responsive history bars, including component-level history.
+- Separate official incident and locally observed history bars, including component history.
+- Catch up on published incidents from while Hermes was off when it starts or resumes.
 - Selectable ranges: 6 hours, 24 hours, 7 / 30 / 90 / 180 days.
 - Selectable intervals: 5 / 15 / 30 minutes, 1 / 6 hours, or 1 day (maximum 600 bars).
 - Automatic polling and manual Refresh with source-specific backoff.
@@ -46,9 +47,10 @@ The three Gemini surfaces are deliberately separate. Perplexity is outside this 
   Service Health, which is outside this unauthenticated plugin.
 - **OpenAI:** component IDs remain distinct, including duplicate names. Group membership is
   not inferred from names. Public aggregate status may differ from an individual user's service.
-- History starts when this plugin begins collecting. Published incident lists have limited
-  retention and are not a complete availability record.
-- Notifications are not included in version 0.1.0.
+- Local observations start when this plugin begins collecting. Official incident history can
+  predate installation or cover time while Hermes was off, within each source's published
+  history window. Records outside that window cannot be recovered by this plugin.
+- Notifications are not included in version 0.2.0.
 
 ## Installation
 
@@ -63,7 +65,7 @@ operating systems have not been verified.
    python package.py
    ```
 
-2. Extract `artifacts/ai-status-board-0.1.0.zip` into
+2. Extract `artifacts/ai-status-board-0.2.0.zip` into
    `<HERMES_HOME>/plugins/ai-status-board/`. `plugin.yaml` must be directly inside that folder.
    Use the home directory belonging to your active Hermes profile.
 3. Enable the backend plugin:
@@ -101,8 +103,19 @@ Missing observations, failed fetches and sleep gaps are not filled with green.
 **Coverage** = known observed duration / selected time range. Unknown time is excluded from
 the first denominator, so read both numbers together. Neither is official uptime.
 
-**Official incident history** is listed separately under each expanded service. The absence of
-an incident does not prove uninterrupted service. Provider update time and fetch time are
+**Official incident history** has its own always-visible bar above local observations. It uses
+published start/end timestamps and incident-level severity, including incidents that started
+and resolved while Hermes was off. Maintenance spans use their published schedule. Gray empty
+buckets mean no stored published record, not proven uptime. Bright gray means unknown severity;
+a white mark indicates a feed publication or unknown-duration event. xAI RSS publication times
+are markers, not asserted outage start times. An unresolved span stops at its last successful
+retrieval so a stale incident is not extended indefinitely. Multiple records may describe the
+same incident, particularly supplementary RSS updates; counts are records, not outage totals.
+
+Expand a service for source-linked incident details and per-endpoint history synchronization
+times. Component bars include only explicitly associated IDs; unscoped events remain at the
+service level. Failed history synchronization preserves stored records and displays an error.
+The absence of an incident does not prove uninterrupted service. Provider update time and fetch time are
 shown separately. Source errors retain the last validated state and label it stale; a 429,
 parse error or unavailable status source is not treated as a provider outage.
 
@@ -126,7 +139,11 @@ Official public status sources
 - `desktop/plugin.js`: renderer using only the scoped `ctx.rest` API.
 
 The scheduler uses four workers and one in-flight request per surface. Source history sync is
-hourly. Requests have a 15-second I/O timeout, a 4 MiB response cap and conditional ETag /
+hourly, plus catch-up on the first eligible poll after startup and after an observation gap
+longer than the stale threshold. History endpoints synchronize independently of current-status
+fetch success. Retry deadlines survive restart, including history-specific 429 Retry-After;
+startup does not bypass provider rate limits. Google and xAI publish history in their regular
+source response. Requests have a 15-second I/O timeout, a 4 MiB response cap and conditional ETag /
 Last-Modified support. Redirects are not followed. HTTP cache Age above one hour is rejected.
 Retry/backoff, jitter and Retry-After are respected; manual refresh does not bypass them or
 xAI's RSS cadence. Stale threshold is twice the poll cadence plus one minute.
@@ -145,7 +162,9 @@ Plugin data is stored in `<HERMES_HOME>/plugin-data/ai-status-board/history.sqli
 - Compressed raw public responses retained for 7 days, with a 32 MiB payload cap.
 - Runtime polling/backoff state retained across restarts.
 
-Collection runs while the Hermes backend is running. SQLite may retain reusable allocated
+Network collection runs while the Hermes backend is running; the next eligible sync imports
+remaining official history from offline periods. No background service is installed.
+SQLite may retain reusable allocated
 pages after pruning; the raw payload cap is not a cap on the entire database file. Newer,
 unsupported database schemas are refused rather than reset automatically.
 
@@ -165,10 +184,13 @@ python -m pip install -r requirements-dev.txt
 python -m unittest discover -s tests -v
 ```
 
-The 27-test suite uses **synthetic fixtures and mocked HTTP**; it needs neither credentials nor
+The test suite uses **synthetic fixtures and mocked HTTP**; it needs neither credentials nor
 live endpoints. Coverage includes degraded/partial/major states, active incidents, maintenance,
 429/5xx/timeouts, malformed JSON/XML, schema drift, stale cache, sleep/resume simulation,
 duplicate snapshots, retention, migration, restart persistence, component changes and API bounds.
+Offline catch-up tests cover restart, resume before the hourly deadline, current-source failure,
+history-only 429 across restart, malformed history, corrections, duration/impact uncertainty,
+component filtering and unchanged local observation gaps.
 Physical PC sleep has not been forced during verification.
 
 An optional isolated UI preview uses your existing Hermes Node dependencies:

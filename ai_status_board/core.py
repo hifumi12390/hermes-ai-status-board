@@ -18,7 +18,7 @@ class Board:
         self.lock=threading.RLock()
         self.stop_event=threading.Event()
         self.executor=concurrent.futures.ThreadPoolExecutor(max_workers=4,thread_name_prefix='ai-status-board')
-        self.busy=set(); self.last={}; self.failures={}; self.next={}; self.bundles={}; self.history_due={}
+        self.busy=set(); self.last={}; self.failures={}; self.next={}; self.history_sync={}
         self.thread=None
         self.backend_error=None
         for a in self.adapters:
@@ -27,6 +27,10 @@ class Board:
                 self.last[a.id]=saved['envelope']
                 self.next[a.id]=saved.get('next_poll',0)
                 self.failures[a.id]=saved.get('failures',0)
+                self.history_sync[a.id]=saved.get('history_sync',{})
+                # On restart re-read the published window; retain endpoint retry deadlines.
+                for sync in self.history_sync[a.id].values():
+                    if not sync.get('error'): sync['next']=0
             else: self.next[a.id]=0
 
     def start(self):
@@ -73,24 +77,48 @@ class Board:
         try: self.history.record(envelope,now,expires,raw)
         except Exception: self.backend_error='Local history write failed; current source status is independent. Check storage.'
 
+    def _sync_history(self,a,attempted,raw):
+        syncs=self.history_sync.setdefault(a.id,{})
+        previous=self.last.get(a.id,{}).get('source',{}).get('attempted_epoch',0)
+        resumed=attempted-previous>a.interval*2+60
+        for key,url in a.history_endpoints().items():
+            sync=syncs.setdefault(key,{})
+            if attempted<sync.get('next',0) and (sync.get('error') or not resumed): continue
+            try:
+                body,meta=self.transport.get(url)
+                events=a.normalize_history(key,body)
+            except Exception as exc:
+                error=exc if isinstance(exc,SourceError) else SourceError('parse_error','Official history could not be normalized')
+                if error.kind=='parse_error': self.transport.invalidate([url])
+                failures=sync.get('failures',0)+1
+                sync.update(error={'kind':error.kind,'message':str(error)},failures=failures,
+                            next=attempted+max(error.retry_after,min(21600,a.interval*2**min(failures-1,6))))
+                continue
+            try: self.history.record_events(a.id,events,self.clock())
+            except Exception:
+                self.backend_error='Official history write failed; check local storage permissions and free space.'
+                sync['next']=attempted+a.interval
+                continue
+            raw.append(body)
+            sync.update(fetched_at=utc(self.clock()),next=attempted+3600,error=None,failures=0,http=meta)
+
     def _poll(self,a):
-        attempted=self.clock(); raw=[]; metadata={}; bundle=dict(self.bundles.get(a.id,{})); history_error=None
+        attempted=self.clock(); raw=[]; metadata={}; bundle={}
         try:
+            # Independent history sync still works when the current-status endpoint fails.
+            self._sync_history(a,attempted,raw)
             for key,url in a.endpoints().items():
-                if key in ('history','maintenance','feed') and key in bundle and attempted<self.history_due.get(a.id,0): continue
-                try:
-                    body,meta=self.transport.get(url)
-                    bundle[key]=body; metadata[key]=meta; raw.append(body)
-                except SourceError as exc:
-                    if key not in ('history','maintenance','feed'): raise
-                    history_error={'kind':exc.kind,'message':str(exc)}
+                if key in a.history_endpoints(): continue
+                body,meta=self.transport.get(url)
+                bundle[key]=body; metadata[key]=meta; raw.append(body)
             envelope=a.normalize(bundle)
             now=self.clock()
+            history_error=next((s['error'] for s in self.history_sync.get(a.id,{}).values() if s.get('error')),None)
             source={'status_page_url':a.origin,'type':a.kind,'scope':'public official status','auth':'none','fetched_at':utc(now),'fetched_epoch':now,'attempted_at':utc(attempted),'attempted_epoch':attempted,'source_updated_at':envelope.pop('source_updated_at',None),'parser_version':'1','stale':False,'error':None,'history_error':history_error,'http':metadata,'interval_seconds':a.interval,'stale_after_seconds':a.interval*2+60}
             envelope['source']=source
             if history_error: envelope['warnings'].append('Official history sync failed; current status remains separate.')
-            self.bundles[a.id]=bundle
-            if history_error is None: self.history_due[a.id]=attempted+3600
+            if a.kind in ('google','rss'):
+                self.history_sync[a.id]={'combined':{'fetched_at':utc(now),'error':None,'next':now+a.interval}}
             self.failures[a.id]=0
             due=now+a.interval+random.uniform(0,min(30,a.interval*.05))
             # TTL covers one expected poll plus scheduling jitter, not the full stale window.
@@ -98,6 +126,8 @@ class Board:
         except Exception as exc:
             now=self.clock()
             error=exc if isinstance(exc,SourceError) else SourceError('parse_error','Response schema could not be normalized')
+            if a.kind in ('google','rss'):
+                self.history_sync.setdefault(a.id,{}).setdefault('combined',{})['error']={'kind':error.kind,'message':str(error)}
             if error.kind=='parse_error': self.transport.invalidate(a.endpoints().values())
             with self.lock: envelope=copy.deepcopy(self.last.get(a.id) or self._empty(a))
             envelope.setdefault('source',{}).update(status_page_url=a.origin,type=a.kind,auth='none',attempted_at=utc(attempted),attempted_epoch=attempted,stale=True,error={'kind':error.kind,'message':str(error)},interval_seconds=a.interval,stale_after_seconds=a.interval*2+60)
@@ -109,8 +139,11 @@ class Board:
             try:
                 with self.lock:
                     if 'envelope' in locals():
+                        syncs=copy.deepcopy(self.history_sync.get(a.id,{}))
+                        envelope['source']['history_sync']=syncs
+                        envelope['source']['history_error']=next((s['error'] for s in syncs.values() if s.get('error')),None)
                         self.last[a.id]=envelope; self.next[a.id]=due
-                        try: self.history.save_runtime(a.id,{'envelope':envelope,'next_poll':due,'failures':self.failures.get(a.id,0)})
+                        try: self.history.save_runtime(a.id,{'envelope':envelope,'next_poll':due,'failures':self.failures.get(a.id,0),'history_sync':syncs})
                         except Exception: self.backend_error='Local runtime checkpoint failed; check storage before restarting.'
             finally:
                 with self.lock: self.busy.discard(a.id)
@@ -128,6 +161,7 @@ class Board:
             source['stale']=bool(source.get('error')) or age>a.interval*2+60 or age<0
             source['next_poll_at']=utc(next_.get(a.id,now))
             e['timeline']=self.history.timeline(a.id,start,now,step)
+            e['official_timeline']=self.history.official_timeline(a.id,start,now,step)
             e['events']=self.history.events(a.id,start,now)
             # Detailed history comes only through the bounded event view.
             e.pop('incidents',None); e.pop('maintenances',None); e.pop('feed_events',None)

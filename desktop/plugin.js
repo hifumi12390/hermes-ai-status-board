@@ -22,6 +22,15 @@ function Bars({timeline}) {
   h('rect',{x:i*4,y:0,width:3.3,height:19,rx:.3,fill:b.coverage===0?COLORS.unknown:COLORS[b.state],opacity:b.coverage===0?.25:1}),
   b.coverage>0&&b.coverage<.99&&h('path',{d:`M${i*4} 19 L${i*4+3.3} 0 L${i*4+3.3} 19 Z`,fill:'#0d111a',opacity:.65}))));
 }
+function OfficialBars({timeline}) {
+ if(!timeline)return null;
+ const count=Math.max(1,timeline.buckets.length);
+ return h('div',null,h('div',{style:{...muted,marginTop:12}},`Official incidents · ${timeline.event_count} published record(s)`),
+  h('svg',{viewBox:`0 0 ${count*4} 13`,preserveAspectRatio:'none',style:{display:'block',height:13,width:'100%',margin:'5px 0 9px'},role:'img','aria-label':`Official incident history: ${timeline.event_count} records; empty gray is not proof of uptime`},timeline.buckets.map((b,i)=>h('g',{key:i},
+   h('title',null,`${date(b.from)} – ${date(b.to)} JST\n${b.event_count?`${b.event_count} published record(s) · ${LABELS[b.state]} · ${b.point_count} publication / unknown-duration marker(s) · ${b.unknown_impact_count} unknown severity`:'No published record in stored history; availability unknown'}`),
+   h('rect',{x:i*4,y:0,width:3.3,height:13,rx:.3,fill:COLORS[b.state],opacity:b.event_count?1:.2}),
+   b.point_count>0&&h('rect',{x:i*4+.8,y:4,width:1.7,height:5,fill:'#dbe4ef'})))));
+}
 function Metrics({timeline}) {
  const coverage=timeline.known_seconds>0&&timeline.coverage_percent===0?'<0.01':timeline.coverage_percent;
  return h('span',{style:muted},`Observed operational ${timeline.operational_percent===null?'—':timeline.operational_percent+'%'} · Coverage ${coverage}%`);
@@ -31,7 +40,7 @@ function Component({item,surface,hours,step,stale}) {
  const q=useQuery({queryKey:[ID,'component',surface,item.id,hours,step],queryFn:()=>ctx.rest(`/component?surface=${encodeURIComponent(surface)}&component=${encodeURIComponent(item.id)}&hours=${hours}&step=${step}`),enabled:open,refetchInterval:open?30000:false});
  return h('div',{style:{padding:'8px 0',borderTop:'1px solid #202a37'}},
   h('button',{onClick:()=>setOpen(!open),'aria-expanded':open,style:{display:'flex',justifyContent:'space-between',width:'100%',gap:10,textAlign:'left',background:'none',border:0,color:'#c9d4e2',cursor:'pointer',fontSize:12}},h('span',null,open?'− ':'+ ',item.name,h('small',{style:{...muted,marginLeft:8}},item.id)),h(Status,{value:item.state,stale})),
-  open&&h('div',null,q.data?h('div',null,h(Bars,{timeline:q.data}),h(Metrics,{timeline:q.data})):h('p',{style:muted},q.error?'Component history unavailable':'Loading component history…')));
+  open&&h('div',null,q.data?h('div',null,h(OfficialBars,{timeline:q.data.official_timeline}),h('span',{style:muted},'Local observations'),h(Bars,{timeline:q.data}),h(Metrics,{timeline:q.data})):h('p',{style:muted},q.error?'Component history unavailable':'Loading component history…')));
 }
 function Event({event}) {
  return h('details',{style:{padding:'8px 0',borderTop:'1px solid #202a37'}},
@@ -48,16 +57,19 @@ function Surface({row,hours,step}) {
   h('div',{style:{display:'flex',justifyContent:'space-between',alignItems:'center',gap:12,flexWrap:'wrap'}},
    h('button',{onClick:()=>setExpanded(!expanded),'aria-expanded':expanded,style:{border:0,padding:0,background:'none',color:'#e7eef7',fontSize:15,fontWeight:600,cursor:'pointer'}},expanded?'− ':'+ ',row.display_name),
    h('div',{style:{display:'flex',gap:18,alignItems:'center'}},h(Status,{value:row.overall.state,stale:s.stale&&Boolean(s.fetched_at)}),h('a',{href:s.status_page_url,target:'_blank',rel:'noopener noreferrer',style:{fontSize:12,color:'#9eafc4'}},'Official source ↗'))),
-  h(Bars,{timeline:row.timeline}),
+  h(OfficialBars,{timeline:row.official_timeline}),
+  h('span',{style:muted},'Local observations'),h(Bars,{timeline:row.timeline}),
   h('div',{style:{display:'flex',justifyContent:'space-between',gap:12,flexWrap:'wrap'}},h(Metrics,{timeline:row.timeline}),h('span',{style:muted},`Fetched ${date(s.fetched_at)} JST`)),
   s.error&&h('p',{role:'status',style:{...muted,margin:'8px 0 0',color:'#c1b8a6'}},`${s.error.kind}: ${s.error.message}`),
   s.stale&&!s.error&&h('p',{role:'status',style:muted},'Stale / no recent validated observation. Refresh is scheduled.'),
+  s.history_error&&h('p',{role:'status',style:muted},`Official history sync failed: ${s.history_error.kind}. Stored records may be incomplete.`),
   incidents.length>0&&h('p',{style:{fontSize:12,color:'#e7ca5b'}},`${incidents.length} published active incident(s) · ${incidents[0].title}`),
   expanded&&h('div',{style:{marginTop:14,padding:'0 0 0 14px',borderLeft:'2px solid #293747'}},
    h('p',{style:muted},row.overall.summary),
    row.warnings.map((w,i)=>h('p',{key:i,style:muted},w)),
    h('p',{style:muted},`Provider updated: ${date(s.source_updated_at)} JST · Next poll: ${date(s.next_poll_at)} JST`),
-   h('h3',{style:{fontSize:12,color:'#aebbd0',margin:'16px 0 8px'}},'Components · expand for local history'),
+   h('p',{style:muted},`History sync: ${Object.entries(s.history_sync||{}).map(([k,v])=>`${k} ${date(v.fetched_at)} JST`).join(' · ')||'Not completed / unsupported'}`),
+   h('h3',{style:{fontSize:12,color:'#aebbd0',margin:'16px 0 8px'}},'Components · expand for official and local history'),
    row.components.length?row.components.filter(c=>c.showcase!==false).map(c=>h(Component,{key:c.id,item:c,surface:row.surface_id,hours,step,stale:s.stale})):h('p',{style:muted},'No supported component inventory.'),
    h('h3',{style:{fontSize:12,color:'#aebbd0',margin:'18px 0 8px'}},`Official incident history (${row.events.total})`),
    h('p',{style:muted},row.events.completeness),
@@ -76,13 +88,13 @@ export function BoardView() {
     h('label',{style:muted},'Range ',h('select',{'aria-label':'Time range',value:hours,style:control,onChange:e=>{const v=Number(e.target.value);setHours(v);if(v*3600/step>600)setStep(allowedSteps(v)[0][0]);}},RANGES.map(([v,l])=>h('option',{key:v,value:v},l)))),
     h('label',{style:muted},'Interval ',h('select',{'aria-label':'Time interval',value:step,style:control,onChange:e=>setStep(Number(e.target.value))},allowedSteps(hours).map(([v,l])=>h('option',{key:v,value:v},l)))),
     h('button',{onClick:refresh,disabled:refreshing,style:{...control,cursor:'pointer'}},refreshing?'Refreshing…':'Refresh'),h('span',{style:muted},'Auto refresh · JST')),
-   h('p',{style:{...muted,lineHeight:1.6}},'Locally observed availability · Colors show observed states; gray and striped gaps are unobserved time. Operational % uses observed time only, not official uptime. Official incident history is listed separately under each service.'),
+   h('p',{style:{...muted,lineHeight:1.6}},'Official incidents include published events from while Hermes was off, synchronized after startup or resume. Empty gray is not proof of uptime; a white mark means a publication or unknown-duration event. Local observations and their operational % remain separate; gray / striped gaps are unobserved time.'),
    h('div',{style:{display:'flex',gap:14,flexWrap:'wrap',marginBottom:16}},Object.keys(COLORS).filter(k=>k!=='informational').map(k=>h('span',{key:k,style:{fontSize:10,color:COLORS[k]}},'● ',LABELS[k]))),
    query.data&&h('div',{style:{display:'flex',justifyContent:'space-between',...muted,marginBottom:12}},h('span',null,date(query.data.surfaces[0].timeline.buckets[0]?.from),' JST'),h('span',null,date(query.data.generated_at),' JST')),
    h('div',{'aria-live':'polite',style:muted},message,query.data?.polling.length?' · Polling in progress':''),
    query.error&&h('p',{role:'alert',style:{color:'#ed9868'}},'Board backend unavailable. Displayed data may be outdated.'),
    query.data?.backend_error&&h('p',{role:'alert',style:{color:'#ed9868'}},query.data.backend_error),
    !query.data?h('p',{style:muted},'Loading status history…'):query.data.surfaces.map(row=>h(Surface,{key:row.surface_id,row,hours,step})),
-   h('footer',{style:{...muted,borderTop:'1px solid #2a3544',padding:'18px 0'}},'Official public sources · No credentials · Collection runs while Hermes backend is running.')));
+   h('footer',{style:{...muted,borderTop:'1px solid #2a3544',padding:'18px 0'}},'Official public sources · No credentials · Offline incidents are recovered within each source’s published history window. AI Studio history is unsupported. Collection runs while Hermes backend is running.')));
 }
 export default {id:ID,name:'AI Status Board',defaultEnabled:true,register(context){ctx=context;ctx.registerMany([{id:'page',area:ROUTES_AREA,data:{path:'/ai-status-board'},render:()=>h(BoardView)},{id:'nav',area:SIDEBAR_NAV_AREA,order:82,data:{path:'/ai-status-board',label:'AI Status Board',codicon:'pulse'}}]);}};

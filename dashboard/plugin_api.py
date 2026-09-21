@@ -53,4 +53,6 @@ def component(surface:str=Query(max_length=100),component:str=Query(max_length=2
     b=get_board()
     if surface not in {a.id for a in b.adapters}: raise HTTPException(404,'Unknown surface')
     now=b.clock()
-    return b.history.timeline(surface,now-hours*3600,now,step,component)
+    result=b.history.timeline(surface,now-hours*3600,now,step,component)
+    result['official_timeline']=b.history.official_timeline(surface,now-hours*3600,now,step,component)
+    return result

@@ -13,7 +13,7 @@ RUNTIME_FILES = [
 
 
 def build():
-    destination = ROOT / 'artifacts' / 'ai-status-board-0.1.0.zip'
+    destination = ROOT / 'artifacts' / 'ai-status-board-0.2.0.zip'
     destination.parent.mkdir(exist_ok=True)
     with ZipFile(destination, 'w', compression=ZIP_DEFLATED) as archive:
         for name in RUNTIME_FILES:
