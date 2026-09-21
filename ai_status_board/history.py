@@ -97,7 +97,7 @@ class History:
         while cursor<end:
             buckets.append({'from':utc(cursor),'to':utc(min(end,cursor+step)),'state':'unknown','event_count':0,'point_count':0,'unknown_impact_count':0,'_states':[]})
             cursor+=step
-        count=0; uncertain_after=end
+        count=0; uncertain_after=float('inf')
         for kind,payload,seen in rows:
             item=json.loads(payload)
             if component is not None and component not in item.get('component_ids',[]): continue

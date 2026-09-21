@@ -64,6 +64,11 @@ class OfficialTimeline(unittest.TestCase):
         self.assertEqual(Board.history_window_start({'incidents':[]},400),utc(400))
         self.assertEqual(Board.history_window_start({'incidents':[{'started_at':utc(100)}]},400),utc(100))
 
+    def test_fractional_query_end_does_not_create_gray_last_bucket(self):
+        self.synced()
+        r=self.h.official_timeline('test',200,400.1234567,100)
+        self.assertEqual(r['buckets'][-1]['state'],'no_reported_incidents')
+
     def test_correction_and_duplicate_upsert(self):
         self.save(); self.save(); self.save(resolved_at=utc(150),impact='critical')
         result=self.h.official_timeline('test',100,200,25)
