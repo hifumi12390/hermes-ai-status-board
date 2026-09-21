@@ -1,1 +1,1 @@
-{"name":"ai-status-board","label":"AI Status Board","description":"Official status and local observations","icon":"Activity","version":"0.2.0","tab":{"path":"/ai-status-board-backend","hidden":true},"api":"plugin_api.py"}
+{"name":"ai-status-board","label":"AI Status Board","description":"Official status and local observations","icon":"Activity","version":"0.2.1","tab":{"path":"/ai-status-board-backend","hidden":true},"api":"plugin_api.py"}

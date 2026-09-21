@@ -36,6 +36,34 @@ class OfficialTimeline(unittest.TestCase):
         self.assertEqual(self.h.official_timeline('test',0,400,100,'api')['event_count'],1)
         self.assertEqual(self.h.official_timeline('test',0,400,100,'other')['event_count'],0)
 
+    def synced(self,**changes):
+        sync={'window_start':utc(100),'fetched_at':utc(400),'error':None}
+        sync.update(changes)
+        self.h.save_runtime('test',{'history_sync':{'history':sync},'envelope':{'source':{'interval_seconds':300}}})
+
+    def test_quiet_green_inside_retrieved_window_only(self):
+        self.save(); self.synced()
+        result=self.h.official_timeline('test',0,400,100)
+        self.assertEqual([b['state'] for b in result['buckets']],
+                         ['unknown','partial_outage','no_reported_incidents','no_reported_incidents'])
+        self.assertEqual(self.h.timeline('test',0,400,100)['known_seconds'],0)
+        self.assertEqual(self.h.official_timeline('test',0,400,100,'other')['buckets'][2]['state'],'no_reported_incidents')
+
+    def test_failed_stale_and_unsupported_history_not_green(self):
+        for changes,end in [({'error':{'kind':'rate_limited'}},400),({},5000),({'window_start':None},400)]:
+            with self.subTest(changes=changes,end=end):
+                self.synced(**changes)
+                self.assertTrue(all(b['state']=='unknown' for b in self.h.official_timeline('test',200,end,100)['buckets']))
+
+    def test_unknown_impact_and_unresolved_tail_not_green(self):
+        self.save(impact='unknown',resolved_at=None,state='investigating'); self.synced()
+        r=self.h.official_timeline('test',100,400,100)
+        self.assertTrue(all(b['state']=='unknown' for b in r['buckets']))
+
+    def test_empty_history_does_not_invent_historical_window(self):
+        self.assertEqual(Board.history_window_start({'incidents':[]},400),utc(400))
+        self.assertEqual(Board.history_window_start({'incidents':[{'started_at':utc(100)}]},400),utc(100))
+
     def test_correction_and_duplicate_upsert(self):
         self.save(); self.save(); self.save(resolved_at=utc(150),impact='critical')
         result=self.h.official_timeline('test',100,200,25)

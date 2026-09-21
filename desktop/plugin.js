@@ -3,8 +3,8 @@ import { createElement as h, useState } from 'react';
 
 const ID='ai-status-board';
 let ctx;
-export const COLORS={operational:'#44cf91',informational:'#65c9e6',maintenance:'#65c9e6',degraded:'#e7ca5b',partial_outage:'#ef9851',major_outage:'#ed6868',unknown:'#687180'};
-const LABELS={operational:'Operational',informational:'Informational',maintenance:'Maintenance',degraded:'Degraded',partial_outage:'Partial outage',major_outage:'Major outage',unknown:'Unknown'};
+export const COLORS={no_reported_incidents:'#44cf91',operational:'#44cf91',informational:'#65c9e6',maintenance:'#65c9e6',degraded:'#e7ca5b',partial_outage:'#ef9851',major_outage:'#ed6868',unknown:'#687180'};
+const LABELS={no_reported_incidents:'No reported incidents',operational:'Operational',informational:'Informational',maintenance:'Maintenance',degraded:'Degraded',partial_outage:'Partial outage',major_outage:'Major outage',unknown:'Unknown'};
 const RANGES=[[6,'6 hours'],[24,'24 hours'],[168,'7 days'],[720,'30 days'],[2160,'90 days'],[4320,'180 days']];
 const STEPS=[[300,'5 min'],[900,'15 min'],[1800,'30 min'],[3600,'1 hour'],[21600,'6 hours'],[86400,'1 day']];
 const control={background:'#151b24',color:'#dce4ec',border:'1px solid #354052',borderRadius:5,padding:'7px 10px',fontSize:12};
@@ -26,9 +26,9 @@ function OfficialBars({timeline}) {
  if(!timeline)return null;
  const count=Math.max(1,timeline.buckets.length);
  return h('div',null,h('div',{style:{...muted,marginTop:12}},`Official incidents · ${timeline.event_count} published record(s)`),
-  h('svg',{viewBox:`0 0 ${count*4} 13`,preserveAspectRatio:'none',style:{display:'block',height:13,width:'100%',margin:'5px 0 9px'},role:'img','aria-label':`Official incident history: ${timeline.event_count} records; empty gray is not proof of uptime`},timeline.buckets.map((b,i)=>h('g',{key:i},
-   h('title',null,`${date(b.from)} – ${date(b.to)} JST\n${b.event_count?`${b.event_count} published record(s) · ${LABELS[b.state]} · ${b.point_count} publication / unknown-duration marker(s) · ${b.unknown_impact_count} unknown severity`:'No published record in stored history; availability unknown'}`),
-   h('rect',{x:i*4,y:0,width:3.3,height:13,rx:.3,fill:COLORS[b.state],opacity:b.event_count?1:.2}),
+  h('svg',{viewBox:`0 0 ${count*4} 13`,preserveAspectRatio:'none',style:{display:'block',height:13,width:'100%',margin:'5px 0 9px'},role:'img','aria-label':`Official incident history: ${timeline.event_count} records; green means no reported incidents, gray means unavailable or unknown`},timeline.buckets.map((b,i)=>h('g',{key:i},
+   h('title',null,`${date(b.from)} – ${date(b.to)} JST\n${b.event_count?`${b.event_count} published record(s) · ${LABELS[b.state]} · ${b.point_count} publication / unknown-duration marker(s) · ${b.unknown_impact_count} unknown severity`:b.state==='no_reported_incidents'?'No reported incidents in retrieved history (not measured uptime)':'History unavailable, stale, or outside retrieved publication window'}`),
+   h('rect',{x:i*4,y:0,width:3.3,height:13,rx:.3,fill:COLORS[b.state],opacity:b.event_count||b.state==='no_reported_incidents'?1:.7}),
    b.point_count>0&&h('rect',{x:i*4+.8,y:4,width:1.7,height:5,fill:'#dbe4ef'})))));
 }
 function Metrics({timeline}) {
@@ -88,7 +88,7 @@ export function BoardView() {
     h('label',{style:muted},'Range ',h('select',{'aria-label':'Time range',value:hours,style:control,onChange:e=>{const v=Number(e.target.value);setHours(v);if(v*3600/step>600)setStep(allowedSteps(v)[0][0]);}},RANGES.map(([v,l])=>h('option',{key:v,value:v},l)))),
     h('label',{style:muted},'Interval ',h('select',{'aria-label':'Time interval',value:step,style:control,onChange:e=>setStep(Number(e.target.value))},allowedSteps(hours).map(([v,l])=>h('option',{key:v,value:v},l)))),
     h('button',{onClick:refresh,disabled:refreshing,style:{...control,cursor:'pointer'}},refreshing?'Refreshing…':'Refresh'),h('span',{style:muted},'Auto refresh · JST')),
-   h('p',{style:{...muted,lineHeight:1.6}},'Official incidents include published events from while Hermes was off, synchronized after startup or resume. Empty gray is not proof of uptime; a white mark means a publication or unknown-duration event. Local observations and their operational % remain separate; gray / striped gaps are unobserved time.'),
+   h('p',{style:{...muted,lineHeight:1.6}},'Official incidents include published events from while Hermes was off, synchronized after startup or resume. Green means no reported incidents in retrieved history, not measured uptime. Gray means unavailable / outside the retrieved window or unknown severity; a white mark means a publication or unknown-duration event. Local observations and their operational % remain separate; gray / striped gaps are unobserved time.'),
    h('div',{style:{display:'flex',gap:14,flexWrap:'wrap',marginBottom:16}},Object.keys(COLORS).filter(k=>k!=='informational').map(k=>h('span',{key:k,style:{fontSize:10,color:COLORS[k]}},'● ',LABELS[k]))),
    query.data&&h('div',{style:{display:'flex',justifyContent:'space-between',...muted,marginBottom:12}},h('span',null,date(query.data.surfaces[0].timeline.buckets[0]?.from),' JST'),h('span',null,date(query.data.generated_at),' JST')),
    h('div',{'aria-live':'polite',style:muted},message,query.data?.polling.length?' · Polling in progress':''),

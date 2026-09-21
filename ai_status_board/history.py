@@ -83,12 +83,21 @@ class History:
         """
         with self.lock:
             rows=self.db.execute('SELECT kind,payload,seen FROM incidents WHERE surface=?',(surface,)).fetchall()
+        runtime=self.runtime(surface) or {}
+        syncs=runtime.get('history_sync',{})
+        primary=syncs.get('history') or syncs.get('combined') or {}
+        window_start=seconds(primary.get('window_start'))
+        fetched=seconds(primary.get('fetched_at'))
+        interval=runtime.get('envelope',{}).get('source',{}).get('interval_seconds',300)
+        usable=(window_start is not None and fetched is not None and
+                0<=end-fetched<=max(3660,interval*2+60) and
+                not any(s.get('error') for s in syncs.values()))
         buckets=[]
         cursor=start
         while cursor<end:
             buckets.append({'from':utc(cursor),'to':utc(min(end,cursor+step)),'state':'unknown','event_count':0,'point_count':0,'unknown_impact_count':0,'_states':[]})
             cursor+=step
-        count=0
+        count=0; uncertain_after=end
         for kind,payload,seen in rows:
             item=json.loads(payload)
             if component is not None and component not in item.get('component_ids',[]): continue
@@ -98,6 +107,7 @@ class History:
             if finish is None:
                 if item.get('state') in ('investigating','identified','monitoring','in_progress','verifying'):
                     finish=seen
+                    uncertain_after=min(uncertain_after,seen)
                 else: point=True
             if finish is not None and begin is not None and finish<=begin: point=True
             if begin is None or begin>=end: continue
@@ -113,9 +123,13 @@ class History:
             for idx in range(left,right+1):
                 b=buckets[idx]; b['event_count']+=1; b['point_count']+=int(point)
                 b['unknown_impact_count']+=int(value=='unknown'); b['_states'].append(value)
-        for b in buckets: b['state']=worst(b.pop('_states'))
+        for b in buckets:
+            b['state']=worst(b.pop('_states'))
+            if not b['event_count'] and usable and seconds(b['to'])<=uncertain_after and seconds(b['from'])>=max(window_start,end-RETENTION):
+                b['state']='no_reported_incidents'
         return {'basis':'official_incident_history','buckets':buckets,'event_count':count,
-                'completeness':'Published history only; gray empty periods do not prove uptime. Severity describes the incident, not continuous component availability. Point markers have no asserted duration.'}
+                'retrieved_window_start':primary.get('window_start'),'history_fetched_at':primary.get('fetched_at'),
+                'completeness':'Green means no reported incident in the retrieved publication window, not measured uptime. Gray means unavailable/outside that window or unknown severity. Severity describes the incident; point markers have no asserted duration.'}
 
     def prune(self,now):
         with self.lock,self.db:

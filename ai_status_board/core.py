@@ -6,10 +6,16 @@ import threading
 import time
 from .adapters import ADAPTERS
 from .history import History
-from .model import SourceError, utc
+from .model import SourceError, utc, seconds
 from .transport import Transport
 
 class Board:
+    @staticmethod
+    def history_window_start(events,now):
+        # A retrieved list is bounded, not a promise of complete historical uptime.
+        dates=[seconds(i.get('started_at')) for i in events.get('incidents',[])]
+        return utc(min([d for d in dates if d is not None and d<=now],default=now))
+
     def __init__(self,path,adapters=None,transport=None,clock=time.time):
         self.adapters=adapters or ADAPTERS
         self.clock=clock
@@ -100,7 +106,8 @@ class Board:
                 sync['next']=attempted+a.interval
                 continue
             raw.append(body)
-            sync.update(fetched_at=utc(self.clock()),next=attempted+3600,error=None,failures=0,http=meta)
+            sync.update(fetched_at=utc(self.clock()),next=attempted+3600,error=None,failures=0,http=meta,
+                        window_start=self.history_window_start(events,self.clock()))
 
     def _poll(self,a):
         attempted=self.clock(); raw=[]; metadata={}; bundle={}
@@ -118,7 +125,8 @@ class Board:
             envelope['source']=source
             if history_error: envelope['warnings'].append('Official history sync failed; current status remains separate.')
             if a.kind in ('google','rss'):
-                self.history_sync[a.id]={'combined':{'fetched_at':utc(now),'error':None,'next':now+a.interval}}
+                self.history_sync[a.id]={'combined':{'fetched_at':utc(now),'error':None,'next':now+a.interval,
+                                                   'window_start':self.history_window_start(envelope,now)}}
             self.failures[a.id]=0
             due=now+a.interval+random.uniform(0,min(30,a.interval*.05))
             # TTL covers one expected poll plus scheduling jitter, not the full stale window.

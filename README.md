@@ -50,7 +50,7 @@ The three Gemini surfaces are deliberately separate. Perplexity is outside this 
 - Local observations start when this plugin begins collecting. Official incident history can
   predate installation or cover time while Hermes was off, within each source's published
   history window. Records outside that window cannot be recovered by this plugin.
-- Notifications are not included in version 0.2.0.
+- Notifications are not included in version 0.2.1.
 
 ## Installation
 
@@ -65,7 +65,7 @@ operating systems have not been verified.
    python package.py
    ```
 
-2. Extract `artifacts/ai-status-board-0.2.0.zip` into
+2. Extract `artifacts/ai-status-board-0.2.1.zip` into
    `<HERMES_HOME>/plugins/ai-status-board/`. `plugin.yaml` must be directly inside that folder.
    Use the home directory belonging to your active Hermes profile.
 3. Enable the backend plugin:
@@ -105,8 +105,11 @@ the first denominator, so read both numbers together. Neither is official uptime
 
 **Official incident history** has its own always-visible bar above local observations. It uses
 published start/end timestamps and incident-level severity, including incidents that started
-and resolved while Hermes was off. Maintenance spans use their published schedule. Gray empty
-buckets mean no stored published record, not proven uptime. Bright gray means unknown severity;
+and resolved while Hermes was off. Maintenance spans use their published schedule. Green empty buckets mean **No reported incidents** within the latest successfully retrieved
+incident list window, not measured uptime. The window starts at the earliest incident returned
+by the primary history response (or fetch time for an empty list). Earlier periods, failed/stale
+history syncs and unsupported history remain gray. This window is a display bound, not a
+guarantee of source completeness. Unknown incident severity also remains gray;
 a white mark indicates a feed publication or unknown-duration event. xAI RSS publication times
 are markers, not asserted outage start times. An unresolved span stops at its last successful
 retrieval so a stale incident is not extended indefinitely. Multiple records may describe the
